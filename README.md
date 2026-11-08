@@ -11,7 +11,7 @@ GARM external-provider CLI contract (`CreateInstance`, `DeleteInstance`, `GetIns
 ## Status
 
 The host-owned registry, the idempotent Tart verb set, fleet placement (T5), and the guest bootstrap
-template (T3) are implemented and unit-tested with stub `tart`/`ssh` binaries. `StartInstance` and
+template and transport (T3) are implemented and unit-tested with stub `tart`/`ssh` binaries. `StartInstance` and
 `StopInstance` are recognised but not implemented yet (they return exit 1); nothing here runs on real
 hardware.
 
@@ -34,8 +34,9 @@ it ships no darwin build. The provider therefore
 
 - runs on the Linux GARM controller and drives Tart on each Mac mini over SSH,
 - selects the `osx`/`arm64` runner tool from the bootstrap payload itself,
-- runs the runner install script that GARM injects into `extra_specs["runner_install_template"]`
-  inside the guest (launchd, JIT credentials, no `systemd`),
+- decodes GARM's base64-encoded `extra_specs["runner_install_template"]` wrapper and streams
+  the script over SSH stdin to hostctl,
+  which runs it inside the guest (launchd, JIT credentials, no `systemd`),
 - caps each host at two macOS guests, which is the limit in the macOS licence agreement.
 
 ## Layout

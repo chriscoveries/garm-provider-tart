@@ -611,6 +611,26 @@ func TestBootstrapReadyToIdle(t *testing.T) {
 	}
 }
 
+func TestBootstrapRetriesInterruptedBootstrappingRecord(t *testing.T) {
+	tart := newFakeTart()
+	svc := newTestService(t, tart)
+	if _, err := svc.Create(createReq("garm-abc123")); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := svc.reg.Load("garm-abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.State = StateBootstrapping
+	if err := svc.reg.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := svc.Bootstrap("garm-abc123", strings.NewReader("echo retry\n"))
+	if err != nil || inst.State != StateIdle {
+		t.Fatalf("bootstrap retry: state=%s err=%v", inst.State, err)
+	}
+}
+
 func TestDrainThenUndrain(t *testing.T) {
 	// Arrange: a host.
 	tart := newFakeTart()

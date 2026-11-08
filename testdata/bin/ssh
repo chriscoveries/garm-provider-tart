@@ -17,6 +17,9 @@
 # Each falls back to the unscoped SSH_STUB_OUTPUT / SSH_STUB_EXIT.
 set -u
 printf '%s\n' "$*" >> "${SSH_STUB_LOG:-/dev/null}"
+if [ -n "${SSH_STUB_STDIN_LOG:-}" ]; then
+  cat > "$SSH_STUB_STDIN_LOG"
+fi
 
 out="${SSH_STUB_OUTPUT:-}"
 ex="${SSH_STUB_EXIT:-0}"

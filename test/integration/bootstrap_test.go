@@ -617,8 +617,8 @@ func assertRegistryAndRunning(t *testing.T, inst cliInstance) {
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 		t.Fatalf("parse registry record: %v\n%s", err, raw)
 	}
-	if rec.State != "ready" && rec.State != "bootstrapping" && rec.State != "idle" {
-		t.Fatalf("registry record state = %q, want ready|bootstrapping|idle", rec.State)
+	if rec.State != "idle" {
+		t.Fatalf("registry record state = %q, want idle after runner bootstrap", rec.State)
 	}
 	if rec.OwnerID != inst.PoolID {
 		t.Fatalf("registry owner_id = %q, want pool %q", rec.OwnerID, inst.PoolID)

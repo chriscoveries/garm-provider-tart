@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/yanksyoon/garm-provider-tart/internal/hostctl"
 )
@@ -80,11 +82,21 @@ func NewClient(host Host, user, keyPath, knownHosts, sshBin, hostctlBin string) 
 // structured faults arrive on stderr and are classified into the returned
 // error.
 func (c *Client) Run(ctx context.Context, verb string, args ...string) ([]byte, error) {
+	return c.RunInput(ctx, nil, verb, args...)
+}
+
+// RunInput streams sensitive script data to hostctl's stdin. The script is
+// never part of the SSH remote command line, fault output, or registry.
+func (c *Client) RunInput(ctx context.Context, stdin io.Reader, verb string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.sshBin, c.argv(verb, args...)...)
 	var stdout, stderr bytes.Buffer
+	cmd.Stdin = stdin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: %s", ErrCommandTimeout, verb)
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			if exitErr.ExitCode() == sshExitUnreachable {
@@ -101,9 +113,8 @@ func (c *Client) Run(ctx context.Context, verb string, args ...string) ([]byte, 
 }
 
 // argv builds the full ssh command: options, target, then the remote hostctl
-// invocation. The hostctl binary path and every argument are passed verbatim;
-// hostctl validates names and image references before touching Tart, so no
-// shell interpolation happens here.
+// invocation. OpenSSH concatenates remote argv into a shell command string;
+// quote all dynamic arguments before they cross that shell boundary.
 func (c *Client) argv(verb string, args ...string) []string {
 	argv := []string{
 		"-o", "BatchMode=yes",
@@ -115,7 +126,10 @@ func (c *Client) argv(verb string, args ...string) []string {
 	if c.knownHosts != "" {
 		argv = append(argv, "-o", "UserKnownHostsFile="+c.knownHosts, "-o", "StrictHostKeyChecking=yes")
 	} else {
-		argv = append(argv, "-o", "StrictHostKeyChecking=no")
+		// Trust new hosts on first connection, but reject changed keys.
+		// Disabling host-key checks exposes the runner script and credentials
+		// to an active network attacker.
+		argv = append(argv, "-o", "StrictHostKeyChecking=accept-new")
 	}
 	argv = append(argv, "-p", strconv.Itoa(c.host.port()))
 	target := c.host.Address
@@ -123,8 +137,16 @@ func (c *Client) argv(verb string, args ...string) []string {
 		target = c.user + "@" + target
 	}
 	argv = append(argv, target, c.hostctlBin, verb)
-	argv = append(argv, args...)
+	for _, arg := range args {
+		argv = append(argv, quoteRemoteArg(arg))
+	}
 	return argv
+}
+
+// quoteRemoteArg ensures that the remote POSIX shell passes one exact argument
+// to hostctl, including spaces, single quotes, and shell metacharacters.
+func quoteRemoteArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // classifyFault parses the structured Fault a failed hostctl verb writes to

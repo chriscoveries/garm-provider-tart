@@ -60,6 +60,11 @@ const defaultStaleCreateTTL = 5 * time.Minute
 // TART_FLEET_PROBE_TIMEOUT_SECONDS when a half-booted VM must fail faster.
 const defaultProbeTimeout = 60 * time.Second
 
+// defaultBootstrapTimeout bounds a guest install script independently of the
+// SSH connection. The host lock and bootstrapping record must eventually be
+// released even when the controller disconnects during a hung install.
+const defaultBootstrapTimeout = 15 * time.Minute
+
 // MaxSlotsPerHost caps concurrent guests per Mac. The macOS licence agreement
 // (section 2.B.iii) allows at most two virtualised instances per Apple-branded
 // host, so a larger value is a licence breach rather than a tuning choice. It
@@ -499,7 +504,7 @@ func (s *Service) delete(name string) error {
 
 // Bootstrap implements the `bootstrap` verb: it requires a ready instance,
 // marks it bootstrapping, runs the supplied script inside the guest via
-// `tart exec <name> -- /bin/bash -s`, and records idle or failed. The token is
+// `tart exec -i <name> /bin/bash -s`, and records idle or failed. The token is
 // never persisted.
 func (s *Service) Bootstrap(name string, script io.Reader) (Instance, error) {
 	if !ValidName(name) {
@@ -514,7 +519,10 @@ func (s *Service) Bootstrap(name string, script io.Reader) (Instance, error) {
 			}
 			return err
 		}
-		if rec.State != StateReady && rec.State != StateIdle {
+		// The existing install wrapper is idempotent. An interrupted hostctl
+		// invocation can leave bootstrapping persisted; the exclusive flock
+		// ensures a retry never competes with a still-active invocation.
+		if rec.State != StateReady && rec.State != StateIdle && rec.State != StateBootstrapping {
 			return &FaultError{Fault: FaultTart, Message: fmt.Sprintf("instance %q is %s, not ready", name, rec.State)}
 		}
 		rec.State = StateBootstrapping
@@ -522,11 +530,11 @@ func (s *Service) Bootstrap(name string, script io.Reader) (Instance, error) {
 		if err := s.reg.Save(rec); err != nil {
 			return err
 		}
-		// The bootstrap script may legitimately run long (downloading the
-		// runner, configuring launchd), so it is not host-bounded: the
-		// provider's ssh deadline on the create verb is the bound, not the
-		// readiness-probe timeout.
-		if err := s.tart.Exec(context.Background(), name, script, "/bin/bash", "-s"); err != nil {
+		// A distinct install timeout limits how long a crashed or hung guest
+		// can pin the host's exclusive lock.
+		bootstrapCtx, cancel := context.WithTimeout(context.Background(), defaultBootstrapTimeout)
+		defer cancel()
+		if err := s.tart.Exec(bootstrapCtx, name, script, "/bin/bash", "-s"); err != nil {
 			rec.State = StateFailed
 			rec.LastError = err.Error()
 			rec.UpdatedAt = s.now()
