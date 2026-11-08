@@ -45,6 +45,8 @@ func TestRealTartCloneUsesStacked(t *testing.T) {
 
 func TestRealTartListParsesLabels(t *testing.T) {
 	// Arrange: the stub replays a list with labels.
+	logPath := filepath.Join(t.TempDir(), "argv.log")
+	t.Setenv("TART_STUB_LOG", logPath)
 	t.Setenv("TART_STUB_LIST", `[{"name":"garm-abc123","state":"running","labels":{"garm-controller-id":"controller-1"}}]`)
 	rt := NewRealTart(tartStub(t))
 
@@ -60,6 +62,13 @@ func TestRealTartListParsesLabels(t *testing.T) {
 	}
 	if vms[0].Label("garm-controller-id") != "controller-1" {
 		t.Fatalf("label = %q, want controller-1", vms[0].Label("garm-controller-id"))
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "list --source local --format json") {
+		t.Fatalf("list argv = %q, want only local VMs", logged)
 	}
 }
 

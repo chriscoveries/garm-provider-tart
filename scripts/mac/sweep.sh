@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Host-side reaper for the Tart fleet. Run periodically (launchd/cron) as root.
 #
-# 1. `status` triggers Reconcile, which reaps quarantined VMs past their TTL,
-#    drops records whose VM vanished, reclaims cloning/running records stranded
-#    by a crashed create past the stale-create TTL, and adopts/quarantines
-#    unrecorded VMs.
+# 1. `status` triggers Reconcile, which drops vanished registry records,
+#    reclaims tracked cloning/running records stranded by a crashed create,
+#    and quarantines unrecorded VMs without deleting unknown ownership.
 # 2. Complete `deleting` tombstones whose VM is already gone by re-invoking
 #    `delete`, which proves release (absent from `tart list`) and frees the slot.
 #
@@ -21,7 +20,7 @@ INSTANCES_DIR="$FLEET_ROOT/instances"
 
 mkdir -p "$(dirname "$LOG")"
 
-# Trigger reconcile so quarantined VMs past their TTL are reaped here.
+# Trigger reconcile and preserve unknown VMs for operator review.
 "$HOSTCTL" status >/dev/null 2>>"$LOG"
 
 # Complete tombstones: a `deleting` record whose VM is already gone frees the

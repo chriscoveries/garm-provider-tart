@@ -105,7 +105,7 @@ func classifyProbe(r hostResult) hostProbe {
 		return hp
 	}
 	hp.status = &st
-	used := st.Capacity.Used + st.Capacity.Adopted
+	used := st.Capacity.Used + st.Capacity.Adopted + st.Capacity.Quarantined
 	hp.free = st.Capacity.Total - used
 	if hp.free < 0 {
 		hp.free = 0

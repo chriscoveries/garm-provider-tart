@@ -324,16 +324,17 @@ func (s *Service) create(req CreateRequest) (Instance, error) {
 }
 
 // enforceCapacity refuses a create when the host is at its licence cap, counting
-// every live record (including deleting tombstones) plus adopted VMs. The
+// every live record (including deleting tombstones), adopted and quarantined VMs. The
 // requested name is not yet a record, so a retry of the same name that failed
 // mid-create is still counted against capacity via its tombstone.
 func (s *Service) enforceCapacity(name string) error {
-	used, adopted, _, err := s.capacity()
+	used, adopted, quarantined, err := s.capacity()
 	if err != nil {
 		return err
 	}
-	if used+adopted >= s.slotsPerHost {
-		return &FaultError{Fault: FaultCapacity, Message: fmt.Sprintf("no free slot: %d of %d slots in use", used+adopted, s.slotsPerHost)}
+	occupied := used + adopted + quarantined
+	if occupied >= s.slotsPerHost {
+		return &FaultError{Fault: FaultCapacity, Message: fmt.Sprintf("no free slot: %d of %d slots in use", occupied, s.slotsPerHost)}
 	}
 	return nil
 }
@@ -388,18 +389,26 @@ func (s *Service) Get(name string) (Instance, error) {
 	return result, err
 }
 
-// inTart reports whether name is present in `tart list` right now.
-func (s *Service) inTart(name string) bool {
+// tartPresence reports whether name is present in `tart list` right now.
+// Destructive operations must propagate a list error rather than assume the
+// VM disappeared and release its registry slot.
+func (s *Service) tartPresence(name string) (bool, error) {
 	vms, err := s.tart.List()
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, vm := range vms {
 		if vm.Name == name {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+// inTart is the best-effort probe used for non-destructive instance reporting.
+func (s *Service) inTart(name string) bool {
+	present, _ := s.tartPresence(name)
+	return present
 }
 
 // List implements the `list` verb, optionally filtered by controller or owner.
@@ -469,26 +478,47 @@ func (s *Service) delete(name string) error {
 		return err
 	}
 
-	if !exists && !s.inTart(name) {
-		// Absent from both registry and tart list: a no-op success.
+	if !exists {
+		present, err := s.tartPresence(name)
+		if err != nil {
+			return fmt.Errorf("verify untracked VM %q: %w", name, err)
+		}
+		if present {
+			return &FaultError{Fault: FaultValidation, Message: fmt.Sprintf("refusing to delete untracked VM %q; use Tart directly after verifying ownership", name)}
+		}
+		// Absent from both registry and tart list: an idempotent no-op.
 		return nil
+	}
+	if rec.State == StateQuarantined || rec.ControllerID == "" || (s.controllerID != "" && rec.ControllerID != s.controllerID) {
+		return &FaultError{Fault: FaultValidation, Message: fmt.Sprintf("refusing to delete VM %q without verified controller ownership", name)}
+	}
+	present, err := s.tartPresence(name)
+	if err != nil {
+		return fmt.Errorf("verify tracked VM %q: %w", name, err)
+	}
+	if !present {
+		// A previous delete may have removed the VM before its confirmation
+		// failed. Once Tart confirms absence, the record can be released.
+		return s.reg.Delete(name)
 	}
 
 	// Mark the tombstone so the slot stays counted for the whole deletion.
 	now := s.now()
-	if exists {
-		rec.State = StateDeleting
-		rec.UpdatedAt = now
-		if err := s.reg.Save(rec); err != nil {
-			return err
-		}
+	rec.State = StateDeleting
+	rec.UpdatedAt = now
+	if err := s.reg.Save(rec); err != nil {
+		return err
 	}
 
 	_ = s.tart.Stop(name) // bounded by the transport timeout; best-effort
 	if err := s.tart.Delete(name); err != nil {
 		return &FaultError{Fault: FaultTart, Message: fmt.Sprintf("delete %q: %v", name, err)}
 	}
-	if s.inTart(name) {
+	present, err = s.tartPresence(name)
+	if err != nil {
+		return fmt.Errorf("verify delete %q: %w", name, err)
+	}
+	if present {
 		return &FaultError{Fault: FaultTart, Message: fmt.Sprintf("delete %q did not release: still present in tart list", name)}
 	}
 	if err := s.reg.Delete(name); err != nil {

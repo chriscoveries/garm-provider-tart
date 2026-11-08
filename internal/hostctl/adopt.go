@@ -9,7 +9,6 @@ import (
 // Reconcile brings the registry into line with `tart list`. It runs at startup
 // and on every status (and before a create reserves capacity). It:
 //
-//   - reaps quarantined VMs whose quarantine TTL has elapsed;
 //   - drops records whose VM has vanished from tart list (someone ran
 //     `tart delete` by hand) — except deleting tombstones, which the delete
 //     verb itself completes;
@@ -17,12 +16,13 @@ import (
 //     once they are older than the stale-create TTL;
 //   - adopts unrecorded VMs that carry this controller's label (they keep a
 //     lease and count against capacity);
-//   - quarantines unrecorded VMs that carry no label, for the quarantine TTL;
-//   - leaves alone unrecorded VMs that carry a foreign controller's label.
+//   - quarantines all other unrecorded VMs without deleting them, and counts
+//     them against capacity until an operator resolves ownership.
 //
 // A provider killed between `tart clone` and the record write leaves a VM with
-// no record here: the next Reconcile adopts or quarantines it, so it is never
-// silently orphaned.
+// no record here: the next Reconcile adopts or quarantines it. Tart does not
+// expose owner labels in current releases, so an unrecognised VM must never be
+// deleted automatically: it might belong to a person or another controller.
 func (s *Service) Reconcile() error {
 	vms, err := s.tart.List()
 	if err != nil {
@@ -44,23 +44,7 @@ func (s *Service) Reconcile() error {
 
 	now := s.now()
 
-	// 1. Reap quarantined VMs whose TTL has elapsed. A failed delete keeps the
-	// record so the next reconcile retries; a lying delete that leaves the VM
-	// behind causes it to be re-quarantined next time.
-	for _, rec := range records {
-		if rec.State != StateQuarantined || rec.QuarantinedAt == nil {
-			continue
-		}
-		if now.Sub(*rec.QuarantinedAt) < s.quarantineTTL {
-			continue
-		}
-		if err := s.tart.Delete(rec.Name); err != nil {
-			continue
-		}
-		_ = s.reg.Delete(rec.Name)
-	}
-
-	// 2. Drop records whose VM is gone and that are not deleting tombstones.
+	// 1. Drop records whose VM is gone and that are not deleting tombstones.
 	for _, rec := range records {
 		if _, ok := byName[rec.Name]; ok {
 			continue
@@ -71,20 +55,21 @@ func (s *Service) Reconcile() error {
 		_ = s.reg.Delete(rec.Name)
 	}
 
-	// 3. Reclaim stale creates: a record stuck in cloning/running past the
+	// 2. Reclaim stale creates: a record stuck in cloning/running past the
 	// stale-create TTL means a create was interrupted (crash). A running record
 	// is re-probed and advanced to ready when the guest now answers; otherwise,
 	// and for a cloning record (which cannot be resumed), the VM is deleted and
 	// the record dropped, releasing the slot.
 	s.reclaimStaleCreates(records, byName, now)
 
-	// 4. Adopt or quarantine unrecorded VMs.
+	// 3. Adopt or quarantine unrecorded VMs. Unknown ownership is never proof
+	// that a VM may be deleted, even when it carries a foreign controller label.
 	for _, vm := range vms {
 		if _, ok := recByName[vm.Name]; ok {
 			continue
 		}
 		switch label := vm.Label(controllerLabelKey); {
-		case label == s.controllerID:
+		case label != "" && label == s.controllerID:
 			rec := Record{
 				Name:         vm.Name,
 				ProviderID:   s.hostName + "/" + vm.Name,
@@ -98,8 +83,10 @@ func (s *Service) Reconcile() error {
 				CreatedAt: now,
 				UpdatedAt: now,
 			}
-			_ = s.reg.Save(rec)
-		case label == "":
+			if err := s.reg.Save(rec); err != nil {
+				return err
+			}
+		default:
 			quarantinedAt := now
 			rec := Record{
 				Name:          vm.Name,
@@ -108,9 +95,9 @@ func (s *Service) Reconcile() error {
 				CreatedAt:     now,
 				UpdatedAt:     now,
 			}
-			_ = s.reg.Save(rec)
-		default:
-			// A foreign controller owns this VM: leave it entirely alone.
+			if err := s.reg.Save(rec); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -165,6 +152,12 @@ func (s *Service) resumeRunning(rec Record) bool {
 func (s *Service) reapStuck(rec Record) {
 	_ = s.tart.Stop(rec.Name) // bounded by the transport timeout; best-effort
 	if err := s.tart.Delete(rec.Name); err != nil {
+		return
+	}
+	// A successful exit is not evidence of deletion. Preserve the record if
+	// Tart still reports the VM, or if the verification command fails.
+	present, err := s.tartPresence(rec.Name)
+	if err != nil || present {
 		return
 	}
 	_ = s.reg.Delete(rec.Name)

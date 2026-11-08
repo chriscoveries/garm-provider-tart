@@ -140,13 +140,13 @@ On each host, confirm the registry and Tart agree that nothing is left:
 
 ```bash
 ssh garm@mac-mini-01 '/usr/local/bin/tart-hostctl status --json' | jq '.capacity'
-ssh garm@mac-mini-01 'tart list --format json' | jq length
+ssh garm@mac-mini-01 'tart list --source local --format json' | jq length
 ```
 
-Both the registry `instances` and `tart list` should be empty. If a VM is unreachable and its delete
-could not complete, the host-side reaper finishes it when the host returns, and the tombstone keeps the
-slot counted until then — a re-image of the host (`/var/db/tart-fleet` and `~/.tart` go with the image)
-is the nuclear option and is safe because GARM re-creates VMs from the pool.
+Both the registry `instances` and the remaining local Tart VMs should be reviewed. Tracked stale creates
+can be reaped automatically, and deleting tombstones retain their slot until absence is verified.
+Untracked VMs are quarantined for manual ownership review, and the host never deletes them automatically.
+A re-image of the host (`/var/db/tart-fleet` and `~/.tart` go with the image) permanently removes those VMs.
 
 ## Add or replace a Mac mini
 

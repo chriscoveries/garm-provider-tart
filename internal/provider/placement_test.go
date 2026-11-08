@@ -41,6 +41,7 @@ func TestPlacementClassifyUpFullUnknown(t *testing.T) {
 	// Arrange: the four raw outcomes a status probe can produce.
 	up := hostResult{host: Host{Name: "a"}, out: statusJSON(t, func(st *hostctl.Status) { st.Capacity.Used = 0 })}
 	full := hostResult{host: Host{Name: "b"}, out: statusJSON(t, func(st *hostctl.Status) { st.Capacity.Used = 2 })}
+	quarantined := hostResult{host: Host{Name: "q"}, out: statusJSON(t, func(st *hostctl.Status) { st.Capacity.Quarantined = 2 })}
 	keychain := hostResult{host: Host{Name: "c"}, out: statusJSON(t, func(st *hostctl.Status) { st.KeychainUnlocked = false })}
 	drained := hostResult{host: Host{Name: "d"}, out: statusJSON(t, func(st *hostctl.Status) { st.Drained = true })}
 	unreachable := hostResult{host: Host{Name: "e"}, err: ErrHostUnreachable}
@@ -54,6 +55,7 @@ func TestPlacementClassifyUpFullUnknown(t *testing.T) {
 	}{
 		{"up", up, classUp},
 		{"full", full, classFull},
+		{"quarantined-full", quarantined, classFull},
 		{"keychain-locked", keychain, classFull},
 		{"drained", drained, classFull},
 		{"unreachable", unreachable, classUnknown},
