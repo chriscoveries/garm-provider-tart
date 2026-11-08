@@ -12,7 +12,7 @@ Tart runs guests on `Virtualization.framework`, Apple Silicon's hypervisor. The 
 | Guest OS | arm64 macOS only; no Intel guests. x86_64 binaries run under Rosetta 2 (CLI only). | native macOS |
 | GPU | paravirtual GPU — Metal and the iOS simulator work | full discrete GPU (for GPU-specific or `eGPU` jobs) |
 | USB / peripherals | no USB passthrough | full passthrough (iOS device testing, hardware-in-the-loop) |
-| Clean room | `--stacked` clone from a golden image is near-instant and ephemeral | manual re-image or MDM; slow to reset |
+| Clean room | Clone from a golden image; `--stacked` is available on macOS 27+ | manual re-image or MDM; slow to reset |
 | Isolation | each job gets a fresh VM; a broken job does not poison the next | shared machine; state leaks between jobs |
 | Density | two guests per host (licence-capped) | one runner per machine |
 | Provisioning | clone + boot + bootstrap, tens of seconds | image and enroll a physical machine |

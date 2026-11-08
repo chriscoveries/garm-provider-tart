@@ -6,17 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
-// VM is one entry of `tart list --format json`: the name, the raw Tart state
-// string ("running"/"stopped"), and any labels Tart exposes. The label field is
-// what adoption keys on; on real Tart the label lookup may need `tart get` per
-// VM (verified on hardware in T7), but the stub and this contract both emit
-// labels on list.
+// VM is one entry of `tart list --format json`: the name and raw Tart state
+// string ("running"/"stopped"). Labels are optional metadata for injected
+// backends and test doubles. Current Tart CLI does not expose VM labels.
 type VM struct {
 	Name   string            `json:"name"`
 	State  string            `json:"state"`
@@ -31,8 +31,8 @@ func (v VM) Label(key string) string {
 	return v.Labels[key]
 }
 
-// controllerLabelKey is the Tart label that records which GARM controller owns
-// a VM. Adoption only keeps VMs carrying this controller's value.
+// controllerLabelKey is the metadata key for backends that can supply a
+// verifiable controller ID. Real Tart VMs rely on host registry records.
 const controllerLabelKey = "garm-controller-id"
 
 // Tart is the subset of the Tart CLI the host driver needs. The concrete
@@ -60,7 +60,8 @@ type Health interface {
 // RealTart runs Tart commands via exec.Command. Bin paths are fields so tests
 // can point them at the testdata/bin/tart stub.
 type RealTart struct {
-	TartBin string
+	TartBin       string
+	StackedClones bool
 }
 
 // NewRealTart returns a Tart that runs the `tart` binary (or TartBin).
@@ -68,7 +69,9 @@ func NewRealTart(tartBin string) *RealTart {
 	if tartBin == "" {
 		tartBin = "tart"
 	}
-	return &RealTart{TartBin: tartBin}
+	// Stacked clones require macOS 27+ and a compatible Tart build. Ordinary
+	// clones remain the default for macOS 26 hosts.
+	return &RealTart{TartBin: tartBin, StackedClones: os.Getenv("TART_FLEET_STACKED_CLONES") == "1"}
 }
 
 func (t *RealTart) run(out io.Writer, args ...string) (string, error) {
@@ -92,35 +95,87 @@ func (t *RealTart) output(args ...string) (string, error) {
 
 // Clone implements Tart.
 func (t *RealTart) Clone(image, name string) error {
-	_, err := t.run(io.Discard, "clone", "--stacked", image, name)
+	args := []string{"clone"}
+	if t.StackedClones {
+		args = append(args, "--stacked")
+	}
+	args = append(args, image, name)
+	_, err := t.run(io.Discard, args...)
 	return err
 }
 
-// SetLabels implements Tart.
+// SetLabels implements Tart. Current Tart CLI releases have no VM label
+// setter. The host-owned registry persists the controller token; any VM
+// created before its first record was saved must be quarantined on recovery.
+// Keep this method for injected backends that support genuine labels.
 func (t *RealTart) SetLabels(name string, labels map[string]string) error {
-	args := []string{"set", name}
-	for k, v := range labels {
-		args = append(args, "--label", k+"="+v)
+	return nil
+}
+
+// SetResources implements Tart.
+func (t *RealTart) SetResources(name string, cpu, memoryMB, diskGB int) error {
+	args := []string{
+		"set", name,
+		"--cpu", strconv.Itoa(cpu),
+		"--memory", strconv.Itoa(memoryMB),
+	}
+	if diskGB > 0 {
+		currentGB, err := t.diskSize(name)
+		if err != nil {
+			return err
+		}
+		// Tart cannot shrink a VM disk. The default Xcode golden image may
+		// already be larger than the requested provider default (50 GB).
+		if float64(diskGB) > currentGB {
+			args = append(args, "--disk-size", strconv.Itoa(diskGB))
+		}
 	}
 	_, err := t.run(io.Discard, args...)
 	return err
 }
 
-// SetResources implements Tart.
-func (t *RealTart) SetResources(name string, cpu, memoryMB, diskGB int) error {
-	_, err := t.run(io.Discard,
-		"set", name,
-		"--cpu", strconv.Itoa(cpu),
-		"--memory", strconv.Itoa(memoryMB),
-		"--disk-size-gb", strconv.Itoa(diskGB),
-	)
-	return err
+// diskSize reads the current root disk size in GB. Tart's `get` JSON has
+// returned Disk as both a number and a quoted number across releases.
+func (t *RealTart) diskSize(name string) (float64, error) {
+	out, err := t.output("get", name, "--format", "json")
+	if err != nil {
+		return 0, err
+	}
+	var config struct {
+		Disk json.RawMessage `json:"Disk"`
+	}
+	if err := json.Unmarshal([]byte(out), &config); err != nil {
+		return 0, fmt.Errorf("parse tart get %q: %w", name, err)
+	}
+	if len(config.Disk) == 0 {
+		return 0, fmt.Errorf("tart get %q: disk size is missing", name)
+	}
+	value := string(config.Disk)
+	if config.Disk[0] == '"' {
+		if err := json.Unmarshal(config.Disk, &value); err != nil {
+			return 0, fmt.Errorf("parse tart get %q disk: %w", name, err)
+		}
+	}
+	size, err := strconv.ParseFloat(value, 64)
+	if err != nil || size <= 0 {
+		return 0, fmt.Errorf("tart get %q: invalid disk size %q", name, value)
+	}
+	return size, nil
 }
 
 // Run implements Tart.
 func (t *RealTart) Run(name string) error {
-	_, err := t.run(io.Discard, "run", "--no-graphics", name)
-	return err
+	// `tart run` stays in the foreground for the entire lifetime of the VM.
+	// Detach it from the short-lived hostctl SSH session so VM startup can
+	// proceed to the bounded readiness probe and the host flock is released.
+	cmd := exec.Command(t.TartBin, "run", "--no-graphics", name)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start tart run %q: %w", name, err)
+	}
+	return cmd.Process.Release()
 }
 
 // IP implements Tart.
@@ -133,7 +188,12 @@ func (t *RealTart) IP(name string) (string, error) {
 // the host flock. Callers that do not need a bound (the bootstrap script runs
 // as long as the provider's ssh deadline allows) pass context.Background().
 func (t *RealTart) Exec(ctx context.Context, name string, stdin io.Reader, args ...string) error {
-	cmdArgs := append([]string{"exec", name, "--"}, args...)
+	cmdArgs := []string{"exec"}
+	if stdin != nil {
+		cmdArgs = append(cmdArgs, "-i")
+	}
+	cmdArgs = append(cmdArgs, name)
+	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.CommandContext(ctx, t.TartBin, cmdArgs...)
 	// WaitDelay bounds the wait for the command's I/O pipes after the context
 	// kills the process: a killed `tart exec` can leave orphaned children (the
@@ -214,10 +274,10 @@ func (h *RealHealth) KeychainUnlocked() (bool, error) {
 	return true, nil
 }
 
-// FreeDiskBytes implements Health using `df -B1 -P <path>` (portable format,
-// byte counts).
+// FreeDiskBytes implements Health using POSIX `df -P -k <path>`, whose
+// available-space column is measured in 1024-byte blocks on macOS and Linux.
 func (h *RealHealth) FreeDiskBytes() (uint64, error) {
-	out, err := exec.Command(h.DfBin, "-B1", "-P", h.Path).Output()
+	out, err := exec.Command(h.DfBin, "-P", "-k", h.Path).Output()
 	if err != nil {
 		return 0, fmt.Errorf("df %s: %w", h.Path, err)
 	}
@@ -226,7 +286,7 @@ func (h *RealHealth) FreeDiskBytes() (uint64, error) {
 		return 0, fmt.Errorf("unexpected df output: %q", strings.TrimSpace(string(out)))
 	}
 	// The last line is the data line for the filesystem containing h.Path;
-	// field 3 is the available byte count.
+	// field 3 is the available count of 1024-byte blocks.
 	fields := strings.Fields(lines[len(lines)-1])
 	if len(fields) < 4 {
 		return 0, fmt.Errorf("unexpected df output: %q", strings.TrimSpace(string(out)))
@@ -235,5 +295,8 @@ func (h *RealHealth) FreeDiskBytes() (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("parse df output: %w", err)
 	}
-	return available, nil
+	if available > ^uint64(0)/1024 {
+		return 0, fmt.Errorf("df available blocks overflow bytes: %d", available)
+	}
+	return available * 1024, nil
 }
