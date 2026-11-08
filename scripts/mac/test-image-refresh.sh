@@ -34,6 +34,8 @@ refresh >"$workdir/run.txt" 2>&1
 grep -q 'pin: ' "$workdir/run.txt" || { echo "missing pin line"; cat "$workdir/run.txt"; exit 1; }
 grep -q 'prune: caches' "$workdir/run.txt" || { echo "expected prune when idle"; cat "$workdir/run.txt"; exit 1; }
 [ -e "$state/tart.pruned" ] || { echo "prune did not run"; exit 1; }
+grep -qF 'sudo -n -H -u garm' "$workdir/stubs.log" \
+  || { echo "refresh operated on the caller's cache rather than the garm account"; exit 1; }
 
 # --- running VM: prune refused ---
 rm -f "$state/tart.pruned"

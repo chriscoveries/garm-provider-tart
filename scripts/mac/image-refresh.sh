@@ -34,7 +34,7 @@ Usage: $PROG [--dry-run] [--image <ref>]
 Pins the golden image by digest, pulls it, verifies it appears in tart list,
 and prunes stale caches (never VMs). Refuses to prune while a VM is running.
 
-Environment: IMAGE, PRUNE_OLDER_THAN, CRANE.
+Environment: IMAGE, PRUNE_OLDER_THAN, CRANE, GARM_USER.
 EOF
 }
 
@@ -74,14 +74,14 @@ main() {
     return 0
   fi
 
-  require_command tart "pull"
+  require_sudo "pull"
 
   local pinned
   pinned="$(pin_image "$IMAGE")"
   log "pin: $pinned"
 
   log "pull: $pinned"
-  tart pull "$pinned" || die "pull: failed to pull $pinned"
+  tart_as_runner pull "$pinned" || die "pull: failed to pull $pinned as $GARM_USER"
 
   log "verify: $pinned"
   tart_has_image "$pinned" || die "verify: $pinned not present in tart list after pull"
@@ -90,7 +90,7 @@ main() {
     log "prune: skipped — a VM is running (refusing to prune while an image is in use)"
   else
     log "prune: caches older than ${PRUNE_OLDER_THAN}d"
-    tart prune --entries caches --older-than "$PRUNE_OLDER_THAN" || die "prune: failed"
+    tart_as_runner prune --entries caches --older-than "$PRUNE_OLDER_THAN" || die "prune: failed"
   fi
 }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Stub sudo: exec the command unchanged (after logging), stripping -n. Set
+# Stub sudo: exec the command unchanged (after logging), stripping -n/-H/-u.
+# All fake users share the unprivileged test process identity. Set
 # STUB_SUDO_DENY=1 to simulate a host without passwordless sudo.
 . "$(dirname "$0")/_stub.sh"
 stub_log "$@"
@@ -8,7 +9,12 @@ if [ "${STUB_SUDO_DENY:-0}" = "1" ]; then
   exit 1
 fi
 args=()
-for a in "$@"; do
-  [ "$a" = "-n" ] || [ "$a" = "--non-interactive" ] || args+=("$a")
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -n|-H|--non-interactive) ;;
+    -u) shift ;; # discard the fake target account too
+    *) args+=("$1") ;;
+  esac
+  shift
 done
 exec "${args[@]}"

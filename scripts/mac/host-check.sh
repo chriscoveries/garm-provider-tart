@@ -68,6 +68,7 @@ run_check power           "sleep disabled (pmset sleep 0, disablesleep 1)"
 run_check updates         "automatic OS updates disabled"
 run_check tart            "Tart installed"
 run_check image           "golden image $IMAGE present"
+run_check registry        "owner-only tart-hostctl registry writable by $GARM_USER"
 run_check prune_timer     "tart prune timer installed"
 run_check config          "provider config fragment present"
 
