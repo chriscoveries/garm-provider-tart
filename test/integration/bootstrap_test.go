@@ -587,12 +587,12 @@ func mustJSON(v any) string {
 }
 
 // assertTartVerbs checks the stub tart saw the create lifecycle in order. The
-// hostctl create verb drives: clone --stacked, set (labels), set (resources),
+// hostctl create drives: clone, get (disk size), set (resources), detached
 // run --no-graphics, exec (readiness), ip (address for the ProviderInstance).
 func assertTartVerbs(t *testing.T) {
 	t.Helper()
 	log := tartLog(t, fakeHost1) + "\n" + tartLog(t, fakeHost2)
-	order := []string{"clone --stacked", "set ", "run --no-graphics", "exec ", "ip "}
+	order := []string{"clone ", "get ", "set ", "run --no-graphics", "exec ", "ip "}
 	pos := -1
 	for _, verb := range order {
 		idx := strings.Index(log[pos+1:], verb)
