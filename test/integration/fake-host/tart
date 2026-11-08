@@ -72,7 +72,10 @@ case "$cmd" in
     printf 'stopped\n' >"$VMS/$name/state"
     ;;
   exec)
-    # exec <name> -- <argv...>  → pretend the guest command succeeded
+    # The guest command succeeds after consuming an optional script on stdin.
+    if [ "${2:-}" = "-i" ]; then
+      cat >/dev/null
+    fi
     ;;
   ip)
     # ip --wait <sec> <name> → fixed guest address

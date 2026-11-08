@@ -30,6 +30,11 @@ case "${1:-}" in
       sleep "$TART_STUB_RUN_SLEEP"
     fi
     ;;
+  exec)
+    if [ "${2:-}" = "-i" ]; then
+      cat >/dev/null
+    fi
+    ;;
   --version)
     printf '%s\n' "${TART_STUB_VERSION:-tart 2.0.0}"
     ;;
