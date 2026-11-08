@@ -38,6 +38,7 @@ export HOST_ADDRESS="10.20.0.11"
 export LAUNCHD_DIR="$workdir/Library/LaunchDaemons"
 export KCPASSWORD_PATH="$workdir/etc/kcpassword"
 export GARM_CONFIG_PATH="$workdir/etc/garm-provider-tart.toml"
+export TART_FLEET_ROOT="$workdir/var/db/tart-fleet"
 export WRAPPER_PATH="$workdir/usr/local/bin/garm-keychain-unlock"
 
 bootstrap() { PATH="$stub_dir:$SYS_PATH" "$scripts_dir/host-bootstrap.sh" "$@"; }
@@ -69,6 +70,16 @@ grep -qxF 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXISTINGEXISTINGEXISTINGEXISTING
   || { echo "pre-existing authorized key was dropped"; cat "$workdir/Users/garm/.ssh/authorized_keys"; exit 1; }
 grep -qxF "$(cat "$workdir/id_ed25519.pub")" "$workdir/Users/garm/.ssh/authorized_keys" \
   || { echo "controller key was not appended"; cat "$workdir/Users/garm/.ssh/authorized_keys"; exit 1; }
+
+# Tart storage is per-user. The bootstrap must pull via the garm account and
+# give that same account an owner-only registry directory for tart-hostctl.
+grep -qF 'sudo -n -H -u garm' "$workdir/stubs.log" \
+  || { echo "Tart operations never switched to the garm account"; cat "$workdir/stubs.log"; exit 1; }
+[ "$(stat -c '%a' "$TART_FLEET_ROOT")" = "700" ] \
+  || { echo "registry directory must be mode 700"; exit 1; }
+[ -d "$TART_FLEET_ROOT" ] || { echo "registry directory was not created"; exit 1; }
+grep -q '<string>garm</string>' "$LAUNCHD_DIR/com.garm.tart-prune.plist" \
+  || { echo "prune daemon did not target garm's Tart cache"; exit 1; }
 
 # --- host-check with stubs: every step ok ---
 host_check --json >"$workdir/check.json" 2>&1

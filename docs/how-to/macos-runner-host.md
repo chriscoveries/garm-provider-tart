@@ -39,12 +39,14 @@ scripts/mac/host-bootstrap.sh
 
 Run the bootstrap as the admin user with passwordless `sudo` — **not** under
 `sudo scripts/mac/host-bootstrap.sh`. Homebrew refuses to run as root, and root's default `PATH` omits
-`/opt/homebrew/bin`, so a root shell breaks the unprivileged Tart install step. The privileged steps (user,
+`/opt/homebrew/bin`, so a root shell breaks the Tart install step. The privileged steps (user,
 Remote Login, auto-login, LaunchDaemons, `pmset`, updates, the config fragment) escalate with `sudo`
-internally; only the Tart install runs unprivileged. The scripts fail naming the step when passwordless
+internally; only the Homebrew install runs as the invoking admin. Image management runs under the
+`garm` account with `sudo -H -u garm`, which keeps Tart's per-user image cache visible to hostctl.
+The scripts fail naming the step when passwordless
 `sudo` is unavailable.
 
-Each of the ten steps is check-then-act, so re-running is safe and makes no changes:
+Each of the eleven steps is check-then-act, so re-running is safe and makes no changes:
 
 1. create the `garm` user and append the controller's authorized key (existing keys are preserved);
 2. enable Remote Login (SSH) and restrict it to `garm` (plus the operator) via `com.apple.access_ssh`;
@@ -53,9 +55,10 @@ Each of the ten steps is check-then-act, so re-running is safe and makes no chan
 5. `pmset -a sleep 0 disablesleep 1 autorestart 1`;
 6. disable automatic OS updates;
 7. install Tart (Homebrew);
-8. pull the pinned golden image;
-9. install a `tart prune` LaunchDaemon (caches only);
-10. write `/etc/garm-provider-tart.toml` — a `[[hosts]]` fragment to copy into the controller config.
+8. pull the pinned golden image into the `garm` account's Tart cache;
+9. create `/var/db/tart-fleet` mode 0700, owned by `garm`, for hostctl's registry and lock;
+10. install a `tart prune` LaunchDaemon that prunes the `garm` account's caches only;
+11. write `/etc/garm-provider-tart.toml` — a `[[hosts]]` fragment to copy into the controller config.
 
 Configuration is via environment variables (see `scripts/mac/lib.sh` for defaults); the ones you will
 normally set are `HOST_NAME`, `HOST_ADDRESS`, `IMAGE`, `GARM_USER`, and the three paths above.
@@ -101,7 +104,7 @@ scripts/mac/image-refresh.sh --image ghcr.io/cirruslabs/macos-tahoe-xcode:26    
 ```
 
 `image-refresh.sh` pins the image by digest (resolving a bare tag with `crane digest`), verifies it
-appears in `tart list`, and prunes only OCI/IPSW caches. It never prunes VMs, and it refuses to prune
+appears in the `garm` account's `tart list`, and prunes that account's OCI/IPSW caches. It never prunes VMs, and it refuses to prune
 while a VM is running (the image is then in use).
 
 ## Failure → cause

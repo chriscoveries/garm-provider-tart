@@ -11,9 +11,10 @@
 #   5. `pmset -a sleep 0 disablesleep 1 autorestart 1`;
 #   6. disable automatic OS updates;
 #   7. install Tart (Homebrew);
-#   8. pull the pinned golden image;
-#   9. install a `tart prune` LaunchDaemon (caches only — never VMs);
-#  10. write the /etc/garm-provider-tart.toml fragment for this host.
+#   8. pull the pinned golden image as the garm user;
+#   9. create the owner-only host registry for tart-hostctl;
+#  10. install a `tart prune` LaunchDaemon for the garm user's caches;
+#  11. write the /etc/garm-provider-tart.toml fragment for this host.
 #
 # Every step is check-then-act: a second run makes no changes and exits 0.
 # `--dry-run` prints the actions and changes nothing. A step that cannot be
@@ -53,7 +54,7 @@ Options:
 Configuration (environment, with defaults from scripts/mac/lib.sh):
   GARM_USER, GARM_SSH_KEY, GARM_PW_FILE, KEYCHAIN_PW_FILE, IMAGE,
   HOST_NAME, HOST_ADDRESS, PRUNE_OLDER_THAN, LAUNCHD_DIR, KCPASSWORD_PATH,
-  GARM_CONFIG_PATH, WRAPPER_PATH
+  GARM_CONFIG_PATH, WRAPPER_PATH, TART_FLEET_ROOT
 EOF
 }
 
@@ -157,8 +158,20 @@ apply_tart() {
 }
 
 apply_image() {
-  require_command tart "image"
-  tart pull "$IMAGE" || die "image: failed to pull $IMAGE"
+  require_sudo "image"
+  tart_as_runner pull "$IMAGE" || die "image: failed to pull $IMAGE as $GARM_USER"
+}
+
+apply_registry() {
+  require_sudo "registry"
+  case "$TART_FLEET_ROOT" in
+    /*) ;;
+    *) die "registry: TART_FLEET_ROOT must be an absolute path" ;;
+  esac
+  [ "$TART_FLEET_ROOT" != / ] && [ ! -L "$TART_FLEET_ROOT" ] \
+    || die "registry: refusing unsafe path $TART_FLEET_ROOT"
+  sudo install -d -m 700 -o "$GARM_USER" -g staff "$TART_FLEET_ROOT" \
+    || die "registry: failed to create owner-only $TART_FLEET_ROOT"
 }
 
 apply_prune_timer() {
@@ -176,6 +189,11 @@ apply_prune_timer() {
   <string>$PRUNE_DAEMON_LABEL</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/usr/bin/sudo</string>
+    <string>-n</string>
+    <string>-H</string>
+    <string>-u</string>
+    <string>$GARM_USER</string>
     <string>$tart_bin</string>
     <string>prune</string>
     <string>--entries</string>
@@ -210,7 +228,7 @@ EOF
 
 # --- driver ----------------------------------------------------------------
 
-STEPS="user remote_login auto_login keychain_daemon power updates tart image prune_timer config"
+STEPS="user remote_login auto_login keychain_daemon power updates tart image registry prune_timer config"
 
 run_steps() {
   local name pending=0 skipped=0

@@ -31,6 +31,7 @@ LAUNCHD_DIR="${LAUNCHD_DIR:-/Library/LaunchDaemons}"
 WRAPPER_PATH="${WRAPPER_PATH:-/usr/local/bin/garm-keychain-unlock}"
 KCPASSWORD_PATH="${KCPASSWORD_PATH:-/etc/kcpassword}"
 GARM_CONFIG_PATH="${GARM_CONFIG_PATH:-/etc/garm-provider-tart.toml}"
+TART_FLEET_ROOT="${TART_FLEET_ROOT:-/var/db/tart-fleet}"
 KEYCHAIN_DAEMON_LABEL="${KEYCHAIN_DAEMON_LABEL:-com.garm.keychain-unlock}"
 PRUNE_DAEMON_LABEL="${PRUNE_DAEMON_LABEL:-com.garm.tart-prune}"
 
@@ -83,15 +84,23 @@ json_string() {
 
 # tart_has_image <ref> — true when `tart list` shows an image whose name
 # contains the ref (the digest when @sha256:-pinned, else the full name).
+tart_as_runner() {
+  local tart_bin
+  tart_bin="$(resolve_bin tart)" || return 127
+  # Tart's image and VM stores default to ~/.tart: use the same account as
+  # the SSH-invoked tart-hostctl for every list, pull, and prune operation.
+  sudo -n -H -u "$GARM_USER" "$tart_bin" "$@"
+}
+
 tart_has_image() {
   local ref="$1" needle="${1##*@}"
   [ "$needle" = "$ref" ] && needle="$ref"
-  tart list --format json 2>/dev/null | grep -qF "$needle"
+  tart_as_runner list --format json 2>/dev/null | grep -qF "$needle"
 }
 
 # vm_running — true when any VM is in a running state.
 vm_running() {
-  tart list --format json 2>/dev/null | grep -Eq '"State"[^,]*"running"'
+  tart_as_runner list --format json 2>/dev/null | grep -Eq '"State"[^,]*"running"'
 }
 
 # kcpassword_bytes <password> — encode the auto-login password using the classic
@@ -179,6 +188,17 @@ check_tart() {
 
 check_image() {
   tart_has_image "$IMAGE"
+}
+
+check_registry() {
+  [ -d "$TART_FLEET_ROOT" ] && [ ! -L "$TART_FLEET_ROOT" ] || return 1
+  local mode
+  case "$(uname -s)" in
+    Darwin) mode="$(stat -f '%Lp' "$TART_FLEET_ROOT" 2>/dev/null)" ;;
+    *) mode="$(stat -c '%a' "$TART_FLEET_ROOT" 2>/dev/null)" ;;
+  esac
+  [ "$mode" = "700" ] || return 1
+  sudo -n -H -u "$GARM_USER" test -w "$TART_FLEET_ROOT" 2>/dev/null
 }
 
 check_prune_timer() {

@@ -5,11 +5,13 @@
 . "$(dirname "$0")/_stub.sh"
 stub_log "$@"
 dflag=0
+mode=""
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -d) dflag=1 ;;
-    -m|-o|-g) shift ;;   # skip the flag's value
+    -m) shift; mode="$1" ;;
+    -o|-g) shift ;;   # skip fake ownership
     -*) ;;
     *) args+=("$1") ;;
   esac
@@ -17,7 +19,10 @@ while [ $# -gt 0 ]; do
 done
 n=${#args[@]}
 if [ "$dflag" = 1 ]; then
-  [ "$n" -ge 1 ] && mkdir -p "${args[n-1]}"
+  if [ "$n" -ge 1 ]; then
+    mkdir -p "${args[n-1]}"
+    [ -z "$mode" ] || chmod "$mode" "${args[n-1]}"
+  fi
   exit 0
 fi
 [ "$n" -ge 2 ] || { echo "install stub: need SRC and DST" >&2; exit 1; }
