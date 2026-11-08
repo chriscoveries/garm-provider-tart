@@ -24,18 +24,14 @@ garm-cli repository list --format json | jq -r '.[] | "\(.name) \(.id)"'
 ## 1. Register the runner-install template
 
 GARM has no darwin OS type, so the macOS runner logic lives in a template registered as `--os-type
-linux`. Register it once:
+linux`. Register it once from the repository root:
 
 ```bash
-garm-cli template create \
-  --name macos-runner \
-  --path internal/macprovider/macos-runner.sh \
-  --forge-type github \
-  --os-type linux
+scripts/mac/register-template.sh macos-runner github
 ```
 
-`scripts/mac/render-template.sh` renders the template (JIT and non-JIT) and fails if it leaks a
-Linux-only mechanism; run it before registering to prove the template renders.
+This command points at `internal/macprovider/macos-runner.sh`, renders both JIT and non-JIT variants,
+and rejects a template containing Linux-only mechanisms before registering it with GARM.
 
 ## 2. Create the pool
 

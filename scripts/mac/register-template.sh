@@ -13,7 +13,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-template="$repo_root/scripts/mac/templates/macos-runner.sh"
+template="$repo_root/internal/macprovider/macos-runner.sh"
 
 name="${1:-macos-runner}"
 forge_type="${2:-github}"
