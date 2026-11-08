@@ -34,7 +34,8 @@ it ships no darwin build. The provider therefore
 
 - runs on the Linux GARM controller and drives Tart on each Mac mini over SSH,
 - selects the `osx`/`arm64` runner tool from the bootstrap payload itself,
-- streams the rendered `extra_specs["runner_install_template"]` script over SSH stdin to hostctl,
+- decodes GARM's base64-encoded `extra_specs["runner_install_template"]` wrapper and streams
+  the script over SSH stdin to hostctl,
   which runs it inside the guest (launchd, JIT credentials, no `systemd`),
 - caps each host at two macOS guests, which is the limit in the macOS licence agreement.
 

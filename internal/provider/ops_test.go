@@ -25,7 +25,7 @@ func TestCreateInstanceStreamsRunnerBootstrapToGuest(t *testing.T) {
 		return nil, nil
 	}
 	p, fleet, _ := newFleetProvider(t, []Host{{Name: "mac-mini-01", Address: "10.20.0.11"}}, bootstrapOutput)
-	extras, _ := json.Marshal(map[string]string{"runner_install_template": script})
+	extras, _ := json.Marshal(map[string][]byte{"runner_install_template": []byte(script)})
 	var stdout strings.Builder
 	if err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", extras)), &stdout); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestCreateInstanceBootstrapFailureCleansUp(t *testing.T) {
 		return nil, nil
 	}
 	p, fleet, _ := newFleetProvider(t, []Host{{Name: "mac-mini-01", Address: "10.20.0.11"}}, handler)
-	extras := json.RawMessage(`{"runner_install_template":"#!/bin/sh\\nexit 1\\n"}`)
+	extras, _ := json.Marshal(map[string][]byte{"runner_install_template": []byte("#!/bin/sh\nexit 1\n")})
 	var stdout strings.Builder
 	err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", extras)), &stdout)
 	if err == nil || !strings.Contains(err.Error(), "guest runner install failed") {
@@ -81,12 +81,30 @@ func TestCreateInstanceRejectsBootstrapWithoutIdleState(t *testing.T) {
 	}
 	p, fleet, _ := newFleetProvider(t, []Host{{Name: "mac-mini-01", Address: "10.20.0.11"}}, handler)
 	var stdout strings.Builder
-	err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", json.RawMessage(`{"runner_install_template":"echo hello"}`))), &stdout)
+	extras, _ := json.Marshal(map[string][]byte{"runner_install_template": []byte("echo hello")})
+	err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", extras)), &stdout)
 	if err == nil || !strings.Contains(err.Error(), "unexpected instance state") {
 		t.Fatalf("create error = %v, want non-idle bootstrap rejection", err)
 	}
 	if got := fleet.callsFor("mac-mini-01", "delete"); len(got) != 1 {
 		t.Fatalf("cleanup delete calls = %v, want one", got)
+	}
+}
+
+func TestCreateInstanceRejectsNonBase64RunnerTemplate(t *testing.T) {
+	handler := func(host, verb string, args []string) ([]byte, error) {
+		t.Fatalf("unexpected host call %s %s: invalid extra_specs must fail before placement", host, verb)
+		return nil, nil
+	}
+	p, _, _ := newFleetProvider(t, []Host{{Name: "mac-mini-01", Address: "10.20.0.11"}}, handler)
+	extras := json.RawMessage(`{"runner_install_template":"#!/bin/sh"}`)
+	var stdout strings.Builder
+	err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", extras)), &stdout)
+	if err == nil || !strings.Contains(err.Error(), "decode bootstrap extra_specs") {
+		t.Fatalf("create error = %v, want invalid base64 rejection", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unexpected create stdout: %q", stdout.String())
 	}
 }
 

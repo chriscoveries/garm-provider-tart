@@ -73,10 +73,11 @@ and host registry records.
 | `cpu` | int | per-VM CPU override (falls back to `default_cpu`) |
 | `mem` | int | per-VM memory override, in MB (falls back to `default_memory_mb`) |
 | `disk` | int | per-VM disk override, in GB (falls back to `default_disk_gb`) |
-| `runner_install_template` | string | GARM's rendered runner-install wrapper, executed inside the guest |
+| `runner_install_template` | base64 string | GARM serializes its `[]byte` rendered wrapper as base64 JSON; the provider decodes it and executes the script inside the guest |
 
 When GARM supplies no install template, the provider logs a warning and returns the ready VM
 for manual provisioning. Attach the macOS template to the pool for working GitHub runners.
+An invalid base64 value is rejected before allocating a VM.
 
 ```json
 { "host": "mac-mini-01", "cpu": 4, "mem": 8192, "disk": 50 }
