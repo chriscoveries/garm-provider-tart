@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -15,9 +16,10 @@ import (
 // fleetFake is an in-memory fleet: a handler that returns canned stdout/error
 // per (host, verb, args) call, plus a call log for assertions.
 type fleetFake struct {
-	mu      sync.Mutex
-	handler func(host, verb string, args []string) ([]byte, error)
-	calls   []string
+	mu               sync.Mutex
+	handler          func(host, verb string, args []string) ([]byte, error)
+	calls            []string
+	bootstrapScripts []string
 }
 
 func (f *fleetFake) run(host, verb string, args []string) ([]byte, error) {
@@ -51,6 +53,17 @@ type fakeRunner struct {
 }
 
 func (r *fakeRunner) Run(ctx context.Context, verb string, args ...string) ([]byte, error) {
+	return r.fleet.run(r.host, verb, args)
+}
+
+func (r *fakeRunner) RunInput(ctx context.Context, stdin io.Reader, verb string, args ...string) ([]byte, error) {
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, err
+	}
+	r.fleet.mu.Lock()
+	r.fleet.bootstrapScripts = append(r.fleet.bootstrapScripts, string(data))
+	r.fleet.mu.Unlock()
 	return r.fleet.run(r.host, verb, args)
 }
 

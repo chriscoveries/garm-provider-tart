@@ -62,9 +62,10 @@ address = "10.20.0.11"
 
 ## `extra_specs` schema
 
-The provider reads the `extra_specs` object from the `CreateInstance` stdin `BootstrapInstance`. Only
-four keys are understood; everything else GARM injects (for example the rendered
-`runner_install_template` wrapper) is ignored.
+The provider reads the `extra_specs` object from the `CreateInstance` stdin `BootstrapInstance`.
+The rendered `runner_install_template` is streamed directly into the guest through hostctl's
+`bootstrap` verb after the VM reaches ready. The script is absent from SSH command arguments
+and host registry records.
 
 | Key | Type | Meaning |
 | --- | --- | --- |
@@ -72,6 +73,10 @@ four keys are understood; everything else GARM injects (for example the rendered
 | `cpu` | int | per-VM CPU override (falls back to `default_cpu`) |
 | `mem` | int | per-VM memory override, in MB (falls back to `default_memory_mb`) |
 | `disk` | int | per-VM disk override, in GB (falls back to `default_disk_gb`) |
+| `runner_install_template` | string | GARM's rendered runner-install wrapper, executed inside the guest |
+
+When GARM supplies no install template, the provider logs a warning and returns the ready VM
+for manual provisioning. Attach the macOS template to the pool for working GitHub runners.
 
 ```json
 { "host": "mac-mini-01", "cpu": 4, "mem": 8192, "disk": 50 }
@@ -219,6 +224,7 @@ Placement rules:
 | capacity wait before a create | `create_timeout_seconds − 120s` | `defaultWaitMargin` |
 | capacity re-probe interval | 5–10 s, jittered | `jitterInterval` |
 | one SSH command | `command_timeout_seconds` (default `30`) | provider config |
+| guest runner bootstrap | remaining `create_timeout_seconds`, host hard cap 15m | provider and hostctl |
 | one host status probe | `probe_timeout_seconds` (default `3`) | provider config |
 | SSH connection | `ConnectTimeout=10`, `BatchMode=yes` | `internal/provider/ssh.go` |
 | readiness probe (`tart exec true`) | `60s` | `TART_FLEET_PROBE_TIMEOUT_SECONDS` |

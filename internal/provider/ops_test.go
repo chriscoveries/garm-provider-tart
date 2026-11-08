@@ -1,12 +1,94 @@
 package provider
 
 import (
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	commonParams "github.com/cloudbase/garm-provider-common/params"
 
 	"github.com/yanksyoon/garm-provider-tart/internal/hostctl"
 )
+
+func TestCreateInstanceStreamsRunnerBootstrapToGuest(t *testing.T) {
+	const script = "#!/bin/sh\necho install runner\n"
+	bootstrapOutput := func(host, verb string, args []string) ([]byte, error) {
+		switch verb {
+		case "status":
+			return statusJSON(t, nil), nil
+		case "create":
+			return instanceJSON(t, host, "garm-abc123", hostctl.StateReady), nil
+		case "bootstrap":
+			return instanceJSON(t, host, "garm-abc123", hostctl.StateIdle), nil
+		}
+		return nil, nil
+	}
+	p, fleet, _ := newFleetProvider(t, []Host{{Name: "mac-mini-01", Address: "10.20.0.11"}}, bootstrapOutput)
+	extras, _ := json.Marshal(map[string]string{"runner_install_template": script})
+	var stdout strings.Builder
+	if err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", extras)), &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if len(fleet.bootstrapScripts) != 1 || fleet.bootstrapScripts[0] != script {
+		t.Fatalf("bootstrap stdin = %#v, want the exact runner wrapper", fleet.bootstrapScripts)
+	}
+	if got := fleet.callsFor("mac-mini-01", "bootstrap"); len(got) != 1 || got[0] != "--name garm-abc123" {
+		t.Fatalf("bootstrap calls = %v", got)
+	}
+	got := decodeInstance(t, stdout.String())
+	if got.Status != commonParams.InstanceRunning {
+		t.Fatalf("status = %q, want running after bootstrap", got.Status)
+	}
+}
+
+func TestCreateInstanceBootstrapFailureCleansUp(t *testing.T) {
+	handler := func(host, verb string, args []string) ([]byte, error) {
+		switch verb {
+		case "status":
+			return statusJSON(t, nil), nil
+		case "create":
+			return instanceJSON(t, host, "garm-abc123", hostctl.StateReady), nil
+		case "bootstrap":
+			return nil, errors.New("guest runner install failed")
+		}
+		return nil, nil
+	}
+	p, fleet, _ := newFleetProvider(t, []Host{{Name: "mac-mini-01", Address: "10.20.0.11"}}, handler)
+	extras := json.RawMessage(`{"runner_install_template":"#!/bin/sh\\nexit 1\\n"}`)
+	var stdout strings.Builder
+	err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", extras)), &stdout)
+	if err == nil || !strings.Contains(err.Error(), "guest runner install failed") {
+		t.Fatalf("create error = %v, want bootstrap failure", err)
+	}
+	if got := fleet.callsFor("mac-mini-01", "delete"); len(got) != 1 {
+		t.Fatalf("cleanup delete calls = %v, want one", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("success payload emitted after bootstrap failure: %q", stdout.String())
+	}
+}
+
+func TestCreateInstanceRejectsBootstrapWithoutIdleState(t *testing.T) {
+	handler := func(host, verb string, args []string) ([]byte, error) {
+		switch verb {
+		case "status":
+			return statusJSON(t, nil), nil
+		case "create", "bootstrap":
+			return instanceJSON(t, host, "garm-abc123", hostctl.StateReady), nil
+		}
+		return nil, nil
+	}
+	p, fleet, _ := newFleetProvider(t, []Host{{Name: "mac-mini-01", Address: "10.20.0.11"}}, handler)
+	var stdout strings.Builder
+	err := p.CreateInstance(strings.NewReader(bootstrapJSON(t, "garm-abc123", json.RawMessage(`{"runner_install_template":"echo hello"}`))), &stdout)
+	if err == nil || !strings.Contains(err.Error(), "unexpected instance state") {
+		t.Fatalf("create error = %v, want non-idle bootstrap rejection", err)
+	}
+	if got := fleet.callsFor("mac-mini-01", "delete"); len(got) != 1 {
+		t.Fatalf("cleanup delete calls = %v, want one", got)
+	}
+}
 
 // TestMapStatus locks the ready-vs-running contract (design 5.2): only the
 // post-bootstrap states map to GARM `running`, while a `running` record — a VM

@@ -49,8 +49,8 @@ type Config struct {
 	SSHUser string `toml:"ssh_user"`
 	// SSHKey is the path to the private key for SSHUser.
 	SSHKey string `toml:"ssh_key"`
-	// KnownHosts is the path to an OpenSSH known_hosts file. When empty, host
-	// keys are not verified (development only).
+	// KnownHosts is the path to an OpenSSH known_hosts file. When empty, new
+	// keys are trusted on first use; changed keys are still rejected.
 	KnownHosts string `toml:"known_hosts"`
 	// SSHBin is the ssh client binary (default "ssh"). Overridable so the
 	// break-glass command wrapper, or tests, can substitute another binary.

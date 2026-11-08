@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	commonParams "github.com/cloudbase/garm-provider-common/params"
@@ -19,6 +20,7 @@ import (
 // in-memory fake to simulate a fleet without exec'ing ssh.
 type runner interface {
 	Run(ctx context.Context, verb string, args ...string) ([]byte, error)
+	RunInput(ctx context.Context, stdin io.Reader, verb string, args ...string) ([]byte, error)
 }
 
 // Provider implements the GARM external-provider operations by driving the
@@ -91,6 +93,26 @@ func (p *Provider) CreateInstance(r io.Reader, w io.Writer) error {
 		}
 		p.metric("create_latency_ms=%d outcome=error host=%s", time.Since(started).Milliseconds(), host.Name)
 		return err
+	}
+	if strings.TrimSpace(specs.RunnerInstallTemplate) != "" {
+		// GARM supplies the rendered runner-install wrapper in extra_specs.
+		// Feed it over SSH stdin so it cannot appear in argv or the host
+		// registry. The guest runs the wrapper via `tart exec -i`.
+		out, err := p.client(host).RunInput(ctx, strings.NewReader(specs.RunnerInstallTemplate), "bootstrap", "--name", bootstrap.Name)
+		if err != nil {
+			p.cleanup(host, bootstrap.Name)
+			return fmt.Errorf("bootstrap %q on %s: %w", bootstrap.Name, host.Name, err)
+		}
+		if err := json.Unmarshal(out, &inst); err != nil {
+			p.cleanup(host, bootstrap.Name)
+			return fmt.Errorf("parse hostctl bootstrap output from %s: %w", host.Name, err)
+		}
+		if inst.State != hostctl.StateIdle || inst.Name != bootstrap.Name || inst.ProviderID != host.Name+"/"+bootstrap.Name {
+			p.cleanup(host, bootstrap.Name)
+			return fmt.Errorf("hostctl bootstrap on %s returned unexpected instance state or identity: %s/%s (%s)", host.Name, inst.ProviderID, inst.Name, inst.State)
+		}
+	} else {
+		p.logf("create %q on %s: no runner_install_template provided; guest has no registered runner", bootstrap.Name, host.Name)
 	}
 	p.metric("create_latency_ms=%d outcome=ok host=%s", time.Since(started).Milliseconds(), host.Name)
 	return writeJSON(w, p.providerInstance(inst))
@@ -210,13 +232,14 @@ func mapStatus(s hostctl.State) commonParams.InstanceStatus {
 }
 
 // extraSpecs is the subset of the pool extra_specs the provider understands:
-// per-VM resource overrides plus a host pin. Everything else GARM injects (the
-// runner install template wrapper) is ignored.
+// per-VM resource overrides, a host pin and GARM's rendered runner-install
+// wrapper. The wrapper is sent only over SSH stdin.
 type extraSpecs struct {
-	Host     string `json:"host"`
-	CPU      int    `json:"cpu"`
-	MemoryMB int    `json:"mem"`
-	DiskGB   int    `json:"disk"`
+	Host                  string `json:"host"`
+	CPU                   int    `json:"cpu"`
+	MemoryMB              int    `json:"mem"`
+	DiskGB                int    `json:"disk"`
+	RunnerInstallTemplate string `json:"runner_install_template"`
 }
 
 func parseExtraSpecs(raw json.RawMessage) extraSpecs {

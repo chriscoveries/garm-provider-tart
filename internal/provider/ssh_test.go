@@ -76,8 +76,50 @@ func TestClientRunRecordsHostctlInvocation(t *testing.T) {
 	if !strings.Contains(line, "garm@10.20.0.11") {
 		t.Fatalf("argv %q missing target user@host", line)
 	}
-	if !strings.Contains(line, "/usr/local/bin/tart-hostctl delete --name garm-abc123") {
+	if !strings.Contains(line, "/usr/local/bin/tart-hostctl delete '--name' 'garm-abc123'") {
 		t.Fatalf("argv %q missing hostctl delete invocation", line)
+	}
+}
+
+func TestClientQuotesRemoteShellArguments(t *testing.T) {
+	c := testClient(t)
+	argv := c.argv("create", "--image", "a;$(touch /tmp/unsafe) 'quoted'", "--owner", "owner with spaces")
+	remote := strings.Join(argv, " ")
+	if !strings.Contains(remote, "'a;$(touch /tmp/unsafe) '\\''quoted'\\''' '") {
+		t.Fatalf("remote command is not safely shell-quoted: %q", remote)
+	}
+	if !strings.Contains(remote, "'owner with spaces'") {
+		t.Fatalf("remote command loses argument boundaries: %q", remote)
+	}
+}
+
+func TestClientVerifiesSSHHostKeys(t *testing.T) {
+	c := testClient(t)
+	joined := strings.Join(c.argv("status"), " ")
+	if !strings.Contains(joined, "StrictHostKeyChecking=accept-new") {
+		t.Fatalf("unconfigured host-key policy is unsafe: %q", joined)
+	}
+	c.knownHosts = "/etc/garm/known_hosts"
+	joined = strings.Join(c.argv("status"), " ")
+	if !strings.Contains(joined, "StrictHostKeyChecking=yes") || !strings.Contains(joined, "UserKnownHostsFile=/etc/garm/known_hosts") {
+		t.Fatalf("explicit known_hosts policy was not enforced: %q", joined)
+	}
+}
+
+func TestClientRunInputForwardsBootstrapOverStdin(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "stdin.log")
+	t.Setenv("SSH_STUB_STDIN_LOG", logPath)
+	c := testClient(t)
+	script := "#!/bin/sh\nprintf 'secret callback token'\n"
+	if _, err := c.RunInput(context.Background(), strings.NewReader(script), "bootstrap", "--name", "garm-abc123"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != script {
+		t.Fatalf("bootstrap stdin changed (got %q)", data)
 	}
 }
 
