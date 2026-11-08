@@ -166,14 +166,16 @@ delete:  deleting → gone
 failure: any live state → failed
 ```
 
-- `cloning` → `running` happens when `tart run` returns.
+- `cloning` → `running` happens when the detached `tart run` process has launched.
 - `running` → `ready` happens only when `tart exec <name> true` succeeds.
 - `ready` → `bootstrapping` → `idle` is driven by the hostctl `bootstrap` verb; `ready` may also move
   straight to `idle` (see `legalTransitions` in `internal/hostctl/state.go`).
 - `deleting` → `gone` is a tombstone transition; `gone` is never persisted, it is the state of an absent
   VM and an absent record.
-- Reconciliation adds two boot-time outcomes: `adopted` (a VM in `tart list` carrying this controller's
-  label but no record) and `quarantined` (an unlabelled VM awaiting the quarantine TTL).
+- Reconciliation adds two boot-time outcomes: `adopted` (a VM carrying a verified controller label
+  but no record) and `quarantined` (a VM without a registry record and verifiable ownership).
+- Current Tart does not expose VM labels, so orphaned VMs without a registry record are quarantined;
+  the `adopted` path is available to backends that supply verifiable controller metadata.
 - `deleting` is reachable from any live state.
 
 ## Slot semantics and capacity
@@ -259,7 +261,7 @@ The host binary exposes an idempotent verb set. JSON goes to stdout; a machine-r
 | Verb | Effect |
 | --- | --- |
 | `status [--json]` | reconcile, then report health: `tart_version`, `keychain_unlocked`, `free_disk_bytes`, `drained`, `capacity`, `instances` |
-| `create --name --image --cpu --mem --disk --controller [--owner] [--host]` | idempotent on name; clone `--stacked`, label, set resources, boot headless, probe readiness |
+| `create --name --image --cpu --mem --disk --controller [--owner] [--host]` | idempotent on name; clone, record controller ownership, set resources, launch headless, probe readiness |
 | `get --name` | record plus live Tart presence and IP |
 | `list [--controller --owner]` | records, excluding quarantined VMs |
 | `delete --name` | prove release; no-op when absent |
@@ -280,5 +282,6 @@ The hostctl CLI is configured through environment variables (`cmd/tart-hostctl/m
 | `TART_FLEET_HOST` | hostname | host component of provider IDs |
 | `TART_FLEET_CONTROLLER_ID` | empty | controller used for adoption |
 | `TART_FLEET_TART_BIN` | `tart` | Tart binary |
+| `TART_FLEET_STACKED_CLONES` | unset | set to `1` only on macOS 27+ with compatible Tart; ordinary clone is the default |
 | `TART_FLEET_SECURITY_BIN` | `security` | keychain probe binary |
 | `TART_FLEET_DF_BIN` | `df` | free-disk probe binary |

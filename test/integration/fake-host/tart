@@ -3,13 +3,14 @@
 #
 # It records every invocation's argv to $TART_STUB_DIR/tart.log and fakes the
 # subset of the Tart CLI the host driver (tart-hostctl) uses:
-#   clone --stacked <image> <name>   create a fake VM record
-#   set <name> [--label k=v | --cpu.. --memory.. --disk-size-gb..]
+#   clone [--stacked] <image> <name> create a fake VM record
+#   get <name> --format json          report the current disk size
+#   set <name> --cpu.. --memory.. [--disk-size..]
 #   run --no-graphics <name>         mark the VM running
 #   stop <name>                      mark the VM stopped
-#   exec <name> -- <argv...>         pretend the guest command succeeded
+#   exec [-i] <name> <argv...>       pretend the guest command succeeded
 #   ip --wait <sec> <name>           print a fixed guest address
-#   list --format json               print the fake VM table as JSON
+#   list [--source local] --format json print the fake VM table as JSON
 #   delete <name>                    remove the fake VM record
 #   --version                        print a Tart version
 #
@@ -30,8 +31,11 @@ cmd="${1:-}"
 
 case "$cmd" in
   clone)
-    # clone --stacked <image> <name>
-    name="${4:-}"
+    if [ "${2:-}" = "--stacked" ]; then
+      name="${4:-}"
+    else
+      name="${3:-}"
+    fi
     [ -n "$name" ] || exit 1
     mkdir -p "$VMS/$name"
     printf 'stopped\n' >"$VMS/$name/state"
@@ -48,9 +52,12 @@ case "$cmd" in
         printf '{"%s":"%s"}\n' "$key" "$val" >"$VMS/$name/labels"
         ;;
       *)
-        # resource set (--cpu/--memory/--disk-size-gb): ignored (fake hardware)
+        # resource set (--cpu/--memory/--disk-size): ignored (fake hardware)
         ;;
     esac
+    ;;
+  get)
+    printf '{"Disk":40}\n'
     ;;
   run)
     # run --no-graphics <name>
@@ -65,7 +72,10 @@ case "$cmd" in
     printf 'stopped\n' >"$VMS/$name/state"
     ;;
   exec)
-    # exec <name> -- <argv...>  → pretend the guest command succeeded
+    # The guest command succeeds after consuming an optional script on stdin.
+    if [ "${2:-}" = "-i" ]; then
+      cat >/dev/null
+    fi
     ;;
   ip)
     # ip --wait <sec> <name> → fixed guest address

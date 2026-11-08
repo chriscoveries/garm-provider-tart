@@ -18,6 +18,23 @@ case "${1:-}" in
   ip)
     printf '%s\n' "${TART_STUB_IP:-192.168.64.5}"
     ;;
+  get)
+    if [ -n "${TART_STUB_GET:-}" ]; then
+      printf '%s\n' "$TART_STUB_GET"
+    else
+      printf '%s\n' '{"Disk":40}'
+    fi
+    ;;
+  run)
+    if [ -n "${TART_STUB_RUN_SLEEP:-}" ]; then
+      sleep "$TART_STUB_RUN_SLEEP"
+    fi
+    ;;
+  exec)
+    if [ "${2:-}" = "-i" ]; then
+      cat >/dev/null
+    fi
+    ;;
   --version)
     printf '%s\n' "${TART_STUB_VERSION:-tart 2.0.0}"
     ;;

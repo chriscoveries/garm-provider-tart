@@ -18,8 +18,8 @@ provider** (a Go binary that speaks the GARM external-provider CLI contract and 
 and run the guest bootstrap through a **custom GARM runner-install template** registered with
 `--os-type linux`.
 
-- **Tart** is the VM layer: `Virtualization.framework` on Apple Silicon, APFS copy-on-write
-  `--stacked` clones, OCI golden images (`ghcr.io/cirruslabs/macos-*-xcode`), and headless
+- **Tart** is the VM layer: `Virtualization.framework` on Apple Silicon, ordinary clones on macOS 26,
+  optional `--stacked` clones on macOS 27+, OCI golden images (`ghcr.io/cirruslabs/macos-*-xcode`), and headless
   `tart run --no-graphics` with a guest agent that supports `tart exec` and `tart ip`.
 - **The provider is thin and stateless.** It execs once per GARM operation, maps the operation to a
   `tart-hostctl` verb over SSH, and holds no state of its own. Truth lives on the Mac (see
@@ -42,7 +42,7 @@ and run the guest bootstrap through a **custom GARM runner-install template** re
 | **VMware Fusion** | Licensing for a fleet is ambiguous; no OCI golden-image pull, no copy-on-write clone density, and a heavier hypervisor stack. Apple Silicon guests are arm64-only regardless of hypervisor, so Fusion adds friction without adding capability. |
 
 Tart was selected because it is free for internal use (FSL-1.1-ALv2, converting to Apache-2.0 two years
-after each release), clones near-instantly with `--stacked`, pulls golden images straight from an OCI
+after each release), supports efficient `--stacked` clones on macOS 27+, pulls golden images straight from an OCI
 registry, and exposes exactly the headless primitives a CI provider needs.
 
 ## Consequences

@@ -170,9 +170,9 @@ func (s *Service) setDrained(d bool) error {
 }
 
 // Create implements the `create` verb. Under the exclusive lock it validates the
-// name and image, refuses on a locked keychain, drain or full host, then clones
-// (--stacked), labels the VM with this controller, sets resources, boots
-// headless and probes readiness with `tart exec true`. It returns the resulting
+// name and image, refuses on a locked keychain, drain or full host, then clones,
+// persists its controller in the host registry, sets resources, launches Tart
+// headless in a detached session and probes readiness with `tart exec true`. It returns the resulting
 // record; a failed readiness probe leaves the record in state `running` with
 // last_error so the caller can decide.
 func (s *Service) Create(req CreateRequest) (Instance, error) {
@@ -499,7 +499,7 @@ func (s *Service) delete(name string) error {
 
 // Bootstrap implements the `bootstrap` verb: it requires a ready instance,
 // marks it bootstrapping, runs the supplied script inside the guest via
-// `tart exec <name> -- /bin/bash -s`, and records idle or failed. The token is
+// `tart exec -i <name> /bin/bash -s`, and records idle or failed. The token is
 // never persisted.
 func (s *Service) Bootstrap(name string, script io.Reader) (Instance, error) {
 	if !ValidName(name) {

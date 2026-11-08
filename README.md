@@ -57,7 +57,12 @@ scripts/contract/         contract capture driver (builds upstream GARM and reco
 - GARM on Linux (no darwin builds are published).
 - Apple Silicon Mac minis running macOS 26, reachable over SSH.
 - `tart-hostctl` installed at `/usr/local/bin/tart-hostctl` on each host.
-- Tart, a golden image in an OCI registry, and an unlocked `login.keychain` on each host.
+- Tart 2.33 or newer, a golden image in an OCI registry, and an unlocked `login.keychain` on each host.
+
+On macOS 26, the provider uses ordinary Tart clones. On macOS 27+ with a compatible Tart build,
+set `TART_FLEET_STACKED_CLONES=1` on the host to opt in to layered clones. Tart currently has
+no VM label setter; controller ownership is persisted in the hostctl registry, and any unrecorded
+VM is quarantined for operator review.
 
 Host preparation (user, Remote Login, auto-login, keychain daemon, power/update settings, Tart, golden
 image, prune timer) is a one-time privileged step: `scripts/mac/host-bootstrap.sh` (see

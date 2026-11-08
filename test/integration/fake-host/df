@@ -1,9 +1,9 @@
 #!/bin/sh
 # Stub `df` for the integration fake host. The host driver runs
-# `df -B1 -P <path>` and reads the 4th field of the last output line as the
-# available byte count; this stub reports a fixed, healthy figure.
+# `df -P -k <path>` and reads the 4th field of the last output line as the
+# available 1024-byte block count; this stub reports a healthy figure.
 path="/var/db/tart-fleet"
-if [ "${1:-}" = "-B1" ] && [ "${2:-}" = "-P" ] && [ -n "${3:-}" ]; then
+if [ "${1:-}" = "-P" ] && [ "${2:-}" = "-k" ] && [ -n "${3:-}" ]; then
   path="${3}"
 fi
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
