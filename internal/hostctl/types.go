@@ -11,7 +11,7 @@ type Instance struct {
 // Capacity is the host's slot accounting, reported by status. used counts live
 // lifecycle records (including deleting tombstones); adopted counts VMs found
 // in tart list that carry this controller's label but had no record; quarantined
-// counts unlabelled VMs awaiting the quarantine TTL. A create is refused when
+// counts local VMs whose ownership has not been proven. A create is refused when
 // used+adopted reaches total.
 type Capacity struct {
 	Total       int `json:"total"`

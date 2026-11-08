@@ -10,8 +10,8 @@ import "regexp"
 //	failure: any live state → failed (last_error kept, slot still held)
 //
 // plus two boot-reconciliation outcomes: adopted (a VM found in `tart list`
-// that carries this controller's label) and quarantined (an unlabelled VM
-// awaiting the quarantine TTL before it is reaped).
+// that carries this controller's label) and quarantined (a VM without proven
+// ownership, preserved until an operator resolves it).
 type State string
 
 const (

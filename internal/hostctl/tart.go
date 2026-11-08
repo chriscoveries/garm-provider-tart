@@ -165,7 +165,9 @@ func (t *RealTart) Delete(name string) error {
 // List implements Tart.
 func (t *RealTart) List() ([]VM, error) {
 	var stdout bytes.Buffer
-	if _, err := t.run(&stdout, "list", "--format", "json"); err != nil {
+	// Exclude OCI images in Tart's local cache; only local VMs can occupy
+	// this host's runner slots or be safely considered for reconciliation.
+	if _, err := t.run(&stdout, "list", "--source", "local", "--format", "json"); err != nil {
 		return nil, err
 	}
 	var vms []VM

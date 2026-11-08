@@ -13,18 +13,20 @@ import (
 
 // fakeTart is an in-memory Tart for precise control over each verb's outcome.
 type fakeTart struct {
-	mu          sync.Mutex
-	vms         map[string]VM
-	cloneErr    error
-	runErr      error
-	execErr     error
-	execHang    bool          // when true, Exec blocks until ctx is done
-	execEntered chan struct{} // when set, closed when Exec is entered
-	deleteErr   error
-	deleteNoop  bool // when true, Delete returns nil without removing the VM
-	version     string
-	ip          string
-	clones      []string
+	mu                 sync.Mutex
+	vms                map[string]VM
+	cloneErr           error
+	runErr             error
+	execErr            error
+	execHang           bool          // when true, Exec blocks until ctx is done
+	execEntered        chan struct{} // when set, closed when Exec is entered
+	deleteErr          error
+	deleteNoop         bool // when true, Delete returns nil without removing the VM
+	listErr            error
+	listErrAfterDelete error
+	version            string
+	ip                 string
+	clones             []string
 }
 
 func newFakeTart() *fakeTart {
@@ -93,11 +95,17 @@ func (f *fakeTart) Delete(name string) error {
 	if !f.deleteNoop {
 		delete(f.vms, name)
 	}
+	if f.listErrAfterDelete != nil {
+		f.listErr = f.listErrAfterDelete
+	}
 	return nil
 }
 func (f *fakeTart) List() ([]VM, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	out := make([]VM, 0, len(f.vms))
 	for _, vm := range f.vms {
 		out = append(out, vm)
@@ -406,7 +414,7 @@ func TestCrashBetweenCloneAndRecordWriteAdoptsOrQuarantines(t *testing.T) {
 	}
 }
 
-func TestAdoptForeignControllerLabelLeftAlone(t *testing.T) {
+func TestAdoptForeignControllerLabelQuarantined(t *testing.T) {
 	// Arrange: a VM carrying another controller's label.
 	tart := newFakeTart()
 	svc := newTestService(t, tart)
@@ -419,9 +427,16 @@ func TestAdoptForeignControllerLabelLeftAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Assert: no record was created, so it is neither adopted nor reaped.
-	if _, err := svc.reg.Load("garm-foreign"); err != ErrNotFound {
-		t.Fatalf("foreign VM was recorded (err=%v), want left alone", err)
+	// Assert: the VM occupies a slot but cannot be adopted or automatically deleted.
+	rec, err := svc.reg.Load("garm-foreign")
+	if err != nil {
+		t.Fatalf("foreign VM not quarantined: %v", err)
+	}
+	if rec.State != StateQuarantined {
+		t.Fatalf("foreign state = %s, want quarantined", rec.State)
+	}
+	if _, exists := tart.vms["garm-foreign"]; !exists {
+		t.Fatal("foreign VM was deleted")
 	}
 }
 
@@ -448,7 +463,7 @@ func TestAdoptCountsAgainstCapacity(t *testing.T) {
 	}
 }
 
-func TestQuarantineUnlabelledVMReapedAfterTTL(t *testing.T) {
+func TestQuarantineUnlabelledVMPreservedAfterTTL(t *testing.T) {
 	// Arrange: an unlabelled VM quarantined, and a clock we control.
 	tart := newFakeTart()
 	svc := newTestService(t, tart)
@@ -464,21 +479,105 @@ func TestQuarantineUnlabelledVMReapedAfterTTL(t *testing.T) {
 		t.Fatalf("stray VM not quarantined: %v", err)
 	}
 
-	// Act: advance past the 24 h TTL and reconcile again.
+	// Act: advance past the historical 24 h TTL and reconcile again.
 	now = now.Add(25 * time.Hour)
 	if err := svc.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
 
-	// Assert: the VM is reaped and its record removed.
-	if _, err := svc.reg.Load("garm-stray"); err != ErrNotFound {
-		t.Fatalf("stray VM not reaped (err=%v)", err)
+	// Assert: without verified ownership, the VM and its registry record stay.
+	if rec, err := svc.reg.Load("garm-stray"); err != nil || rec.State != StateQuarantined {
+		t.Fatalf("stray VM not quarantined after TTL: rec=%+v err=%v", rec, err)
 	}
 	tart.mu.Lock()
 	_, present := tart.vms["garm-stray"]
 	tart.mu.Unlock()
-	if present {
-		t.Fatal("stray VM still present in tart list after reap")
+	if !present {
+		t.Fatal("stray VM deleted after TTL")
+	}
+}
+
+func TestQuarantineConsumesCapacity(t *testing.T) {
+	tart := newFakeTart()
+	svc := newTestService(t, tart)
+	tart.vms["untracked-1"] = VM{Name: "untracked-1"}
+	tart.vms["untracked-2"] = VM{Name: "untracked-2"}
+
+	if _, err := svc.Create(createReq("garm-abc123")); faultOf(t, err).Fault != FaultCapacity {
+		t.Fatalf("create fault = %v, want capacity", err)
+	}
+	if len(tart.clones) != 0 {
+		t.Fatalf("cloned %d VMs on a full host", len(tart.clones))
+	}
+}
+
+func TestDeleteRefusesUnknownAndQuarantinedVMs(t *testing.T) {
+	tart := newFakeTart()
+	svc := newTestService(t, tart)
+	tart.vms["untracked-1"] = VM{Name: "untracked-1"}
+
+	// An untracked VM is protected even before any reconciliation.
+	if fe := faultOf(t, svc.Delete("untracked-1")); fe.Fault != FaultValidation {
+		t.Fatalf("untracked delete fault = %q, want validation", fe.Fault)
+	}
+	if err := svc.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if fe := faultOf(t, svc.Delete("untracked-1")); fe.Fault != FaultValidation {
+		t.Fatalf("quarantined delete fault = %q, want validation", fe.Fault)
+	}
+	if _, exists := tart.vms["untracked-1"]; !exists {
+		t.Fatal("untracked VM was deleted")
+	}
+}
+
+func TestDeleteListFailureKeepsTombstone(t *testing.T) {
+	tart := newFakeTart()
+	svc := newTestService(t, tart)
+	if _, err := svc.Create(createReq("garm-abc123")); err != nil {
+		t.Fatal(err)
+	}
+	tart.listErrAfterDelete = errors.New("tart list temporarily unavailable")
+	if err := svc.Delete("garm-abc123"); err == nil {
+		t.Fatal("delete succeeded without proving VM absence")
+	}
+	rec, err := svc.reg.Load("garm-abc123")
+	if err != nil || rec.State != StateDeleting {
+		t.Fatalf("tombstone lost after list failure: rec=%+v err=%v", rec, err)
+	}
+	tart.listErr = nil
+	tart.listErrAfterDelete = nil
+	if err := svc.Delete("garm-abc123"); err != nil {
+		t.Fatalf("delete retry failed: %v", err)
+	}
+}
+
+func TestDeleteListFailureBeforeDeletePreservesVM(t *testing.T) {
+	tart := newFakeTart()
+	svc := newTestService(t, tart)
+	if _, err := svc.Create(createReq("garm-abc123")); err != nil {
+		t.Fatal(err)
+	}
+	tart.listErr = errors.New("tart list temporarily unavailable")
+	if err := svc.Delete("garm-abc123"); err == nil {
+		t.Fatal("delete succeeded without being able to inspect Tart")
+	}
+	if _, exists := tart.vms["garm-abc123"]; !exists {
+		t.Fatal("delete ran when Tart list was unavailable")
+	}
+}
+
+func TestEmptyControllerCannotAdoptUnlabelledVM(t *testing.T) {
+	tart := newFakeTart()
+	svc := newTestService(t, tart)
+	svc.controllerID = ""
+	tart.vms["garm-unlabelled"] = VM{Name: "garm-unlabelled"}
+	if err := svc.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := svc.reg.Load("garm-unlabelled")
+	if err != nil || rec.State != StateQuarantined {
+		t.Fatalf("unlabelled VM wrongly adopted: rec=%+v err=%v", rec, err)
 	}
 }
 
@@ -905,6 +1004,30 @@ func TestStaleCloningRecordReaped(t *testing.T) {
 	tart.mu.Unlock()
 	if present {
 		t.Fatal("VM still present in tart list after reap")
+	}
+}
+
+func TestStaleReaperPreservesRecordWhenTartDeleteLies(t *testing.T) {
+	tart := newFakeTart()
+	tart.deleteNoop = true
+	svc := newTestService(t, tart)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	tart.vms["garm-stuck4"] = VM{Name: "garm-stuck4", State: "stopped"}
+	if err := svc.reg.Save(Record{
+		Name:         "garm-stuck4",
+		ControllerID: "controller-1",
+		State:        StateCloning,
+		CreatedAt:    now.Add(-time.Hour),
+		UpdatedAt:    now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if rec, err := svc.reg.Load("garm-stuck4"); err != nil || rec.State != StateCloning {
+		t.Fatalf("stale VM record released without proof: rec=%+v err=%v", rec, err)
 	}
 }
 

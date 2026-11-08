@@ -67,7 +67,7 @@ Three defects, none of them about SSH versus HTTP:
   the record is gone; an unreachable host yields a hard error so GARM retries, and the tombstone keeps
   the slot counted until the VM is confirmed gone.
 - **Adoption with an owner token.** VMs found after a reboot are adopted only if they carry this
-  controller's label; unlabelled VMs are quarantined for a TTL and then reaped.
+  controller's label; unverified VMs are quarantined until manually resolved.
 
 ## Security controls (from the adversarial review)
 

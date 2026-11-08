@@ -173,7 +173,7 @@ failure: any live state → failed
 - `deleting` → `gone` is a tombstone transition; `gone` is never persisted, it is the state of an absent
   VM and an absent record.
 - Reconciliation adds two boot-time outcomes: `adopted` (a VM in `tart list` carrying this controller's
-  label but no record) and `quarantined` (an unlabelled VM awaiting the quarantine TTL).
+  non-empty label but no record) and `quarantined` (a VM whose controller ownership cannot be proven).
 - `deleting` is reachable from any live state.
 
 ## Slot semantics and capacity
@@ -185,9 +185,10 @@ A host counts its licence slots via `capacity { total, used, adopted, quarantine
   itself set this value.
 - `used` counts every live lifecycle record, including `deleting` tombstones.
 - `adopted` counts VMs carrying this controller's label but no record.
-- `quarantined` counts unlabelled VMs awaiting the quarantine TTL.
+- `quarantined` counts all untracked local VMs whose ownership cannot be proven. They remain available
+  for operator inspection and are never deleted automatically.
 
-`create` is refused with a `capacity` fault when `used + adopted >= total`. A tombstone keeps its slot
+`create` is refused with a `capacity` fault when `used + adopted + quarantined >= total`. A tombstone keeps its slot
 counted until the VM is confirmed absent from `tart list`, so a failed delete can never double-book a
 slot.
 
@@ -223,7 +224,7 @@ Placement rules:
 | SSH connection | `ConnectTimeout=10`, `BatchMode=yes` | `internal/provider/ssh.go` |
 | readiness probe (`tart exec true`) | `60s` | `TART_FLEET_PROBE_TIMEOUT_SECONDS` |
 | stale create reclaim | `5m` | `TART_FLEET_STALE_CREATE_TIMEOUT` |
-| quarantine TTL | `24h` | `TART_FLEET_QUARANTINE_TTL_HOURS` |
+| quarantine TTL | deprecated | `TART_FLEET_QUARANTINE_TTL_HOURS` is accepted but does not delete unknown VMs |
 | record lease TTL | `900s` (informational) | `defaultLeaseTTLSeconds` |
 
 ## Failure and cleanup behaviour
@@ -233,12 +234,15 @@ Placement rules:
   cover the case where the cleanup delete cannot run because the host is unreachable.
 - **Create, placement fault.** `no_reachable_host` or `capacity` is returned as an errored
   `ProviderInstance` with `provider_fault` set, not as a hard error, so GARM can tell the two apart.
-- **Delete.** `delete` proves release: stop (bounded) → `tart delete` → confirm absent from `tart list`
-  → remove the record → release the slot. Absent VM = no-op success. Unreachable host = hard error so
-  GARM retries; the `deleting` tombstone keeps the slot counted.
-- **Reaper.** `Reconcile` runs on every `status` and before every `create`: it reaps quarantined VMs past
-  the TTL, drops records whose VM vanished (except `deleting` tombstones), reclaims stale
-  `cloning`/`running` records left by a crashed create, and adopts or quarantines unrecorded VMs.
+- **Delete.** `delete` proves release: check registry ownership → stop → `tart delete` → confirm absent
+  from `tart list` → remove the record → release the slot. An absent VM can release its existing
+  record. Untracked or quarantined VMs require manual ownership verification and direct Tart
+  intervention. A failed confirmation keeps the `deleting` tombstone and its slot counted.
+- **Reconciliation.** `Reconcile` runs on every `status` and before every `create`: it drops vanished
+  records (except `deleting` tombstones), reclaims stale tracked `cloning`/`running` records,
+  adopts VMs with an explicit matching controller label, and quarantines all other local VMs.
+  Quarantine has no automatic expiry. Review and remove foreign or abandoned VMs manually with Tart.
+  `tart list --source local` excludes OCI cache entries from this reconciliation.
 
 ## Invariants
 
@@ -276,7 +280,7 @@ The hostctl CLI is configured through environment variables (`cmd/tart-hostctl/m
 | `TART_FLEET_SLOTS_PER_HOST` | `2` | licence cap used by `capacity`; values above `2` are rejected |
 | `TART_FLEET_STALE_CREATE_TIMEOUT` | `5m` | stale-create reclaim TTL |
 | `TART_FLEET_PROBE_TIMEOUT_SECONDS` | `60` | readiness-probe bound |
-| `TART_FLEET_QUARANTINE_TTL_HOURS` | `24` | quarantine TTL |
+| `TART_FLEET_QUARANTINE_TTL_HOURS` | `24` | deprecated, accepted for backwards compatibility; no automatic VM deletion |
 | `TART_FLEET_HOST` | hostname | host component of provider IDs |
 | `TART_FLEET_CONTROLLER_ID` | empty | controller used for adoption |
 | `TART_FLEET_TART_BIN` | `tart` | Tart binary |
